@@ -12,22 +12,32 @@ to generate this file without the comments in this block.
 -}
 { name = "my-project"
 , dependencies =
-  [ "arrays"
+  [ "aff"
+  , "argonaut-codecs"
+  , "argonaut-core"
+  , "arrays"
   , "avar"
   , "console"
   , "debug"
+  , "dom-filereader"
   , "effect"
+  , "either"
   , "foldable-traversable"
   , "foreign-generic"
   , "integers"
   , "math"
   , "maybe"
+  , "media-types"
   , "numbers"
   , "p5"
   , "prelude"
   , "psci-support"
   , "tuples"
+  , "web-dom"
+  , "web-events"
+  , "web-file"
   , "web-html"
+  , "web-uievents"
   ]
 , packages = ./packages.dhall
 , sources = [ "src/**/*.purs", "test/**/*.purs" ]

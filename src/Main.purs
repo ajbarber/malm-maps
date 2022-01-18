@@ -2,31 +2,47 @@ module Main where
 
 import Prelude
 
-import Data.Array (deleteBy, filter, fold, range, snoc)
+import Data.Argonaut.Decode (JsonDecodeError, decodeJson, parseJson)
+import Data.Array (deleteBy, range, snoc)
+import Data.Either (Either(..))
 import Data.Foldable (for_)
 import Data.Int (round, toNumber)
 import Data.Maybe (Maybe(..), maybe, isNothing)
+import Data.MediaType (MediaType(..))
 import Data.Number.Format (toString)
-import Data.Traversable (sequence, traverse, traverse_)
-import Data.Tuple (Tuple(..), fst, snd)
+import Data.Traversable (traverse_)
+import Data.Tuple (Tuple(..))
 import Debug (spy, traceM)
 import Effect (Effect)
 import Effect.AVar (AVar)
 import Effect.AVar (empty, new, tryPut, tryTake, tryRead) as EVar
+import Effect.Aff (launchAff_)
+import Effect.Class (liftEffect)
 import Effect.Console (log)
 import Foreign.Generic (encodeJSON)
 import Math ((%))
 import P5 (draw, getP5, setup)
 import P5.Color (background2, fill)
 import P5.Events.Mouse (mousePressed, mouseReleased)
-import P5.IO (saveStrings)
 import P5.Image (image, image2, loadImage)
 import P5.Mouse (mouseX, mouseY)
 import P5.Rendering (createCanvas)
 import P5.Shape (ellipse, line, rect)
-import P5.Types (ArrayNumberOrVector(..), ElementOrImage(..), Image, P5)
+import P5.Types (ElementOrImage(..), Image, P5)
+import Web.DOM.Element as Element
+import Web.DOM.ParentNode (QuerySelector(..), querySelector)
+import Web.Event.Event (target)
+import Web.Event.EventTarget (EventListener, EventTarget, addEventListener, eventListener)
+import Web.File.Blob (fromString)
+import Web.File.File (toBlob)
+import Web.File.FileList (FileList, item)
+import Web.File.FileReader.Aff (readAsText)
+import Web.File.Url (createObjectURL)
 import Web.HTML (window)
-import Web.HTML.Window (innerWidth, innerHeight)
+import Web.HTML.HTMLDocument as Document
+import Web.HTML.HTMLInputElement (files, fromEventTarget)
+import Web.HTML.Window (document)
+import Web.UIEvent.InputEvent.EventTypes as IETypes
 
 type AppState = {
   p5 :: P5
@@ -116,17 +132,42 @@ removeItem xpos ypos pasteStAVar = do
       void $ EVar.tryPut ps' pasteStAVar
     Nothing -> pure unit
 
-restoreSt :: Coords -> Array TCoordMap -> AVar (Coords) -> AVar (Array TCoordMap) -> Effect Boolean
+restoreSt ::
+  Coords ->
+  Array TCoordMap ->
+  AVar (Coords) ->
+  AVar (Array TCoordMap) ->
+  Effect Boolean
 restoreSt cutSt pasteSt cutStAVar pasteStAVar = do
   void $ EVar.tryPut cutSt cutStAVar
   EVar.tryPut pasteSt pasteStAVar
 
-save :: P5 -> AVar (Array TCoordMap) -> Effect Unit
-save p pasteStAVar = do
+save :: AVar (Array TCoordMap) -> Effect Unit
+save pasteStAVar = do
   mps <- EVar.tryRead pasteStAVar
+  win <- window
+  doc <- document win
+  -- get the buttons
+  let docAsParent = Document.toParentNode doc
   case mps of
-    Just ps -> log $ encodeJSON ps
+    Just ps -> do
+      let blob = fromString (encodeJSON ps) (MediaType "application/json")
+      downloadUrl <- createObjectURL blob
+      anchor <- querySelector (QuerySelector "#save") docAsParent
+      for_ anchor \a -> do
+        Element.setAttribute "href" downloadUrl a
+        Element.setAttribute "download" downloadUrl a
+
     Nothing -> log "nothing"
+
+load :: String -> AVar (Array TCoordMap) -> Effect Unit
+load buf pasteStAVar = do
+  case (decodeJson =<< parseJson buf) of
+    Left e -> log "error decoding"
+    Right r -> do
+      log "loaded successfully"
+      void $ EVar.tryTake pasteStAVar
+      void $ EVar.tryPut r pasteStAVar
 
 paste ::
   Number ->
@@ -176,6 +217,7 @@ main mAppState = do
   p <- maybe getP5 (\x -> pure x.p5) mAppState
   cutSt <- EVar.empty
   pasteSt <- EVar.new []
+  hookLoadButton pasteSt
 
   let img = loadImage p "assets/Overworld.png" Nothing Nothing
   let icon = loadImage p "assets/close.png" Nothing Nothing
@@ -187,7 +229,7 @@ main mAppState = do
   mousePressed p do
     Tuple x y <- mouseCoords p
     log "press"
-    save p pasteSt
+    save pasteSt
     let belowRect = y >= rectHeight
     mcs <- EVar.tryTake cutSt
     case (Tuple mcs belowRect) of
@@ -246,3 +288,35 @@ main mAppState = do
       Nothing -> pure unit
 
   pure $ Just { p5: p }
+
+hookLoadButton ::
+  AVar (Array TCoordMap) ->
+  Effect Unit
+hookLoadButton pasteSt = do
+ -- get the document
+  win <- window
+  doc <- document win
+  -- get the buttons
+  let docAsParent = Document.toParentNode doc
+  input <- querySelector (QuerySelector "#fileinput") docAsParent
+  for_ input \n -> do
+    hdlr <- loadFile pasteSt
+    let target = Element.toEventTarget n
+    addEventListener IETypes.input hdlr false target
+
+fileList :: EventTarget -> Effect (Maybe FileList)
+fileList tar = case fromEventTarget tar of
+  Just elem -> files elem
+  _         -> pure Nothing
+
+loadFile :: AVar (Array TCoordMap) -> Effect EventListener
+loadFile pasteSt = eventListener $ \e -> do
+  for_ (target e) \t -> do
+    mfs <- fileList t
+    launchAff_ do
+      content <- maybe (pure "") readAsText $ (Just <<< toBlob) =<< item 0 =<< mfs
+      liftEffect $ load content pasteSt
+
+handleEvent :: Effect EventListener
+handleEvent = eventListener $ \e -> do
+  log "hello"
