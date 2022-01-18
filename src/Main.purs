@@ -23,6 +23,7 @@ import Foreign.Generic (encodeJSON)
 import Math ((%))
 import P5 (draw, getP5, setup)
 import P5.Color (background2, fill)
+import P5.Events.Keyboard (keyIsDown, keyPressed)
 import P5.Events.Mouse (mousePressed, mouseReleased)
 import P5.Image (image, image2, loadImage)
 import P5.Mouse (mouseX, mouseY)
@@ -52,6 +53,8 @@ initialState :: Maybe AppState
 initialState = Nothing
 
 data Coords = Coords (Maybe Number) (Maybe Number) (Maybe Number) (Maybe Number)
+
+type ControlState = { deleteMode :: Boolean }
 
 withDest
   :: Coords ->
@@ -212,11 +215,16 @@ renderIcon p img dest =
   (Just 16.0)
   (Just 16.0)
 
+-- | cutSt - buffer for the active selection from the tile map.
+-- | pasteSt -- state representing what has been pasted. The constructed map in other words. This is
+-- | what is saved.
+-- | controlSt - state representing the control modes available. Currently just delete mode and default.
 main :: Maybe AppState -> Effect (Maybe AppState)
 main mAppState = do
   p <- maybe getP5 (\x -> pure x.p5) mAppState
   cutSt <- EVar.empty
   pasteSt <- EVar.new []
+  controlSt <- EVar.new { deleteMode: false }
   hookLoadButton pasteSt
 
   let img = loadImage p "assets/Overworld.png" Nothing Nothing
@@ -226,12 +234,23 @@ main mAppState = do
     _ <- createCanvas p 700.0 700.0 Nothing
     pure unit
 
+  keyPressed p do
+    log "here"
+    let dPressed = keyIsDown p 68.0
+    if dPressed then do
+      res <- EVar.tryTake controlSt
+      false <$ for_ res \n -> do
+        EVar.tryPut { deleteMode: not n.deleteMode } controlSt
+    else pure false
+
   mousePressed p do
     Tuple x y <- mouseCoords p
     log "press"
     save pasteSt
     let belowRect = y >= rectHeight
     mcs <- EVar.tryTake cutSt
+    mmode <-EVar.tryRead controlSt
+    let deleteMode = maybe false _.deleteMode mmode
     case (Tuple mcs belowRect) of
       Tuple (Just cs) false -> do
         ps <- paste x y cs pasteSt
@@ -241,7 +260,7 @@ main mAppState = do
           EVar.tryPut (Coords (Just x) (Just y) Nothing Nothing) cutSt
       Tuple Nothing false -> do
         toggleWall x y pasteSt
-        removeItem x y pasteSt
+        if (deleteMode) then removeItem x y pasteSt else pure unit
         pure false
       Tuple _ _ -> pure false
 
@@ -262,10 +281,12 @@ main mAppState = do
     rect p 0.0 0.0 700.0 rectHeight Nothing Nothing
     mps <- EVar.tryRead pasteSt
     mcs <- EVar.tryRead cutSt
+    mmode <-EVar.tryRead controlSt
+    let deleteMode = maybe false _.deleteMode mmode
     case mps of
       Just ps -> for_ ps \n -> do
         renderTile p img n
-        if isNothing mcs then renderIcon p icon n.dest else pure unit
+        if (isNothing mcs && deleteMode) then renderIcon p icon n.dest else pure unit
       Nothing -> pure unit
 
     image p (ElementOrImageImage img) 0.0 rectHeight Nothing Nothing
